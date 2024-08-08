@@ -75,12 +75,12 @@ with DAG(
         trigger_rule="all_done"
         )
 
-    agg = PythonVirtualenvOperator(
+    agg = BashOperator(
         task_id='agg',
-        python_callable=data,
-        system_site_packages=False,
-        trigger_rule="one_success",
-        # requirements=["git+https://github.com/lsiwh37249/mov.git@0.3.3/api"],              venv_cache_path="/home/kim1/tmp2/airflow_venv/get_data"
+        bash_command="""
+            $SPARK_HOME/bin/spark-submit /home/kim1/airflow_pyspark/py/movie_agg.py movie_agg {{ds_nodash}}
+        """,
+        trigger_rule="all_done"
     )
     rm_dir = BashOperator(
         task_id='rm.dir',
