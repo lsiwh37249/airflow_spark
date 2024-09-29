@@ -1,0 +1,103 @@
+from datetime import datetime, timedelta
+from textwrap import dedent
+
+# The DAG object; we'll need this to instantiate a DAG
+from airflow import DAG
+
+# Operators; we need this to operate!
+from airflow.operators.bash import BashOperator
+from airflow.operators.empty import EmptyOperator
+
+from pprint import pprint
+
+from airflow.operators.python import PythonOperator, PythonVirtualenvOperator, BranchPythonOperator
+import pandas as pd
+import pickle
+from sklearn.neighbors import KNeighborsClassifier
+import requests
+
+with DAG(
+    'fish_test',
+    # These args will get passed on to each operator
+    # You can override them on a per-task basis during operator initialization
+    default_args={
+        'depends_on_past': False,
+        'email_on_failure' : False,
+        'email_on_retry' : False,
+        'retries': 1,
+        'retry_delay': timedelta(seconds=3)
+        },
+    max_active_tasks=3,
+    max_active_runs=1,
+    description='hello world DAG',
+    #schedule=timedelta(days=1),
+    schedule="@once",
+    start_date=datetime(2015, 1, 1),
+    end_date=datetime(2015,1,4),
+    catchup=True,
+    tags=['api', 'fish'],
+) as dag:
+
+    def fish_request(length, weight):
+        headers = {
+            'accept': 'application/json',
+        }
+
+        params = {
+            'length': length,
+            'weight': weight,
+        }
+        print(params)
+
+        response = requests.get('http://localhost:8765/fish', params=params, headers=headers)
+        j = response.json()
+        r = j.get("prediction")
+        
+        if r == "빙어":
+            return 1
+        else: 
+            return 0
+
+    def to_parquet():
+        df = pd.read_csv('~/data/fish_test_data_100k.csv')
+        df.to_parquet("~/data/fish_test_data_100k.parquet")
+
+    def predict():
+        df = pd.read_parquet("~/data/fish_test_data_100k.parquet")
+        #with open("/home/kim1/code/finshmlserv/src/finshmlserv/model.pkl", "rb" ) as f:
+        #    fish_model = pickle.load(f)
+
+        df_1 = df.iloc[:,[0,1]]
+        #predictions = fish_model.predict(df_1)
+        predictions = fish_request(df_1)
+
+        df_1['result'] = predictions
+        print(df_1)
+        parquet_path ="~/data/fish_parquet/fish_predict_parquet"
+        df_1.to_parquet(parquet_path)
+
+    def agg():
+        df = pd.read_parquet("~/data/fish_parquet/fish_predict_parquet")
+        r = df.groupby('result').count()
+        print(r)
+
+
+    load_csv = PythonOperator(
+        task_id="load.csv",
+        python_callable=to_parquet
+    )
+
+    predict_task = PythonOperator(
+        task_id="predict.task", 
+        python_callable=predict
+    )
+
+    agg_task = PythonOperator(
+        task_id="agg.task",
+        python_callable=agg
+    )
+
+    task_end = EmptyOperator(task_id='end', trigger_rule="all_done")
+    task_start = EmptyOperator(task_id='start')
+
+    task_start >> load_csv >> predict_task >> agg_task >> task_end
